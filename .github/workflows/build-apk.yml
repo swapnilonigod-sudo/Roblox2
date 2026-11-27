@@ -1,9 +1,5 @@
-name: Build APK
 
-# Works in two ways (no PC needed):
-#  A) The whole project is uploaded to the repo (gradlew is in the repo root).
-#  B) Only ONE .zip of the project is uploaded to the repo root (the workflow unzips it).
-# Run it from: Actions -> Build APK -> Run workflow.
+name: Build APK
 
 on:
   push:
@@ -17,54 +13,68 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Locate project (repo root or inside a .zip)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Locate project (repo root or inside ZIP)
         id: locate
         shell: bash
         run: |
           set -euo pipefail
+
           if [ -f gradlew ]; then
             echo "Project found in repo root."
             echo "dir=." >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           ZIP=""
           for z in ./*.zip; do
             [ -f "$z" ] || continue
             LIST="$(unzip -Z1 "$z" || true)"
-            # here-string (not a pipe): "grep -q" + pipefail would fail with SIGPIPE
-            if grep -qE '(^|/)gradlew$' <<< "$LIST"; then ZIP="$z"; break; fi
+
+            if grep -qE '(^|/)gradlew$' <<< "$LIST"; then
+              ZIP="$z"
+              break
+            fi
           done
+
           if [ -z "$ZIP" ]; then
-            echo "::error::No gradlew in repo root and no project .zip found. Upload the project files or the project .zip to the repo root."
+            echo "::error::No Gradle wrapper found in repository or ZIP."
             exit 1
           fi
-          echo "Unzipping $ZIP"
+
           mkdir -p _project
           unzip -q -o "$ZIP" -d _project
-          GW="$(find _project -maxdepth 3 -name gradlew -type f | head -n 1)"
+
+          GW="$(find _project -maxdepth 4 -type f -name gradlew | head -n 1)"
+
           if [ -z "$GW" ]; then
-            echo "::error::gradlew not found inside $ZIP"
+            echo "::error::gradlew not found after extraction."
             exit 1
           fi
+
           echo "dir=$(dirname "$GW")" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
         shell: bash
         working-directory: ${{ steps.locate.outputs.dir }}
         run: |
-          # Uploading through a browser drops the executable bit of gradlew.
+          set -euo pipefail
           chmod +x ./gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
@@ -74,4 +84,3 @@ jobs:
           name: forge-ai-studio-debug-apk
           path: ${{ steps.locate.outputs.dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
